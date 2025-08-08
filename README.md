@@ -1,31 +1,39 @@
-# Keepsake MVP — Repo Bootstrap (Docs-Only)
+# Keepsake MVP — App Scaffold (Commit 1)
 
-This repository bootstrap contains **documentation and environment variable templates only**. It’s designed so you can create the project in Vercel and set up secrets **before any application code is added**.
+This is the **initial code scaffold** for the Keepsake MVP. It includes:
+- Next.js (App Router, TypeScript, Tailwind)
+- API routes for onboarding, token exchange, upload, outline, drafts, export (PDF)
+- Supabase admin client (server-only), SQL migrations (RLS: server-only for MVP)
+- Token model: one-time URL → HttpOnly cookie session
 
-> If you want a placeholder "Coming Soon" page so Vercel deploys without errors, add a single `index.html` later. This bootstrap intentionally contains **no app code**.
+## Deploy (Vercel)
+1. Set these **Vercel env vars** (Production):
+   - `OPENAI_API_KEY`
+   - `NEXT_PUBLIC_SUPABASE_URL`
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   - `SUPABASE_SERVICE_ROLE_KEY` *(server only)*
+   - `PROJECT_TOKEN_SECRET` *(random, long)*
+   - `PDF_SECRET_SALT` *(random, long)*
+   - Optional: `RETENTION_DAYS=365`, `MAX_AUDIO_DURATION_SECONDS=1800`, `MAX_AUDIO_FILE_MB=200`, `REGEN_LIMIT_PER_CHAPTER=2`
 
-## What’s here
-- `/docs/PRD.md`: Your Product Requirements Document, for reference.
-- `/docs/ENVVARS.md`: All environment variables with purpose, scope, and defaults.
-- `/docs/REPO_STRUCTURE.md`: Proposed directory layout for the Next.js app.
-- `SECURITY.md`: Non-technical overview of the project token model and privacy.
-- `.env.example`: Copy to `.env.local` for local development once code is added.
-- `.gitignore`: Node/Next/Vercel ignores.
+2. **Supabase**
+   - Create a project
+   - In SQL Editor: run `supabase/migrations/001_init.sql` then `002_policies.sql`
+   - Create private Storage buckets: `audio`, `pdfs` (and `images` if you opt-in later)
 
-## Quick start
-1. Create a **private GitHub repo**, e.g., `keepsake-mvp`.
-2. Push this bootstrap (or upload the ZIP contents) to that repo.
-3. In **Vercel**, import the repo to create the project.
-4. In **Vercel → Settings → Environment Variables**, add the variables from `/docs/ENVVARS.md` (copy from `.env.example` as a starting point).
-5. Create your **Supabase** project and paste its URL/keys into Vercel.
-6. After plan approval, application code will be pushed and Vercel will auto-deploy.
+3. **Push & Deploy**
+   - `npm i`
+   - `npm run build` (locally to verify)
+   - Push to GitHub → Vercel auto-deploys
 
-## After approval — first code push will include
-- Next.js scaffold (`/app` router), Supabase client, token exchange middleware
-- Upload → Transcribe → Outline → Draft → PDF endpoints
-- RLS-enabled migrations and seed scripts
-- Branded PDF template and basic UI
+## Using the app
+- Visit `/` → fill the Onboard form → copy the **private link** (`/t/<token>`)
+- Open the private link once → cookie session is set → redirected to `/session/<projectId>/upload`
+- Upload audio → (Next) Transcribe → Outline → Draft → Export
+
+> Pages for transcript/outline/draft currently show “Coming Soon” placeholders—API endpoints and data model are ready for wiring as we implement the next milestones.
 
 ## Notes
-- Keep the **Service Role Key** server-side only (Vercel server environment). Never expose it to the browser.
-- Tokens are single-use in the URL; after first visit they are rotated and stored as an HttpOnly cookie.
+- RLS policies are **deny-all** for now; all DB access goes through server-side API routes with the **Service Role** key. This is simplest and safest for MVP.
+- PDF uses `puppeteer-core` + `@sparticuz/chromium`. Vercel will use the serverless Chrome binary automatically.
+

@@ -2,10 +2,11 @@
 import { useState } from 'react';
 import Card from '@/components/Card';
 import Section from '@/components/Section';
+import DateOfBirthPicker from '@/components/DateOfBirthPicker';
 
 export default function Home() {
   const [name, setName] = useState('');
-  const [dob, setDob] = useState('');
+  const [dobIso, setDobIso] = useState<string | null>(null); // ISO YYYY-MM-DD or null
   const [relationship, setRelationship] = useState('');
   const [themes, setThemes] = useState('');
   const [output, setOutput] = useState('book');
@@ -13,21 +14,27 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const submit = async (e: any) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true); setError(null);
-    try{
+    try {
       const res = await fetch('/api/onboard', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, dob, relationship, themes, output }),
+        body: JSON.stringify({
+          name,
+          dob: dobIso,              // <-- now using ISO string from the picker
+          relationship,
+          themes,
+          output,
+        }),
       });
-      if(!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setShareUrl(data.shareUrl);
-    } catch(err:any){
+    } catch (err: any) {
       setError(err.message || 'Failed to create project');
-    } finally{
+    } finally {
       setLoading(false);
     }
   };
@@ -42,12 +49,39 @@ export default function Home() {
         </div>
         <Section title="Interviewee Details">
           <form onSubmit={submit} className="grid gap-4">
-            <input className="border rounded px-3 py-2" placeholder="Interviewee Name" value={name} onChange={e=>setName(e.target.value)} required />
-            <input className="border rounded px-3 py-2" placeholder="Date of Birth (YYYY-MM-DD)" value={dob} onChange={e=>setDob(e.target.value)} />
-            <input className="border rounded px-3 py-2" placeholder="Relationship (e.g., Father, Grandmother)" value={relationship} onChange={e=>setRelationship(e.target.value)} />
-            <input className="border rounded px-3 py-2" placeholder="Themes (comma-separated)" value={themes} onChange={e=>setThemes(e.target.value)} />
+            <input
+              className="border rounded px-3 py-2"
+              placeholder="Interviewee Name"
+              value={name}
+              onChange={e => setName(e.target.value)}
+              required
+            />
+
+            <DateOfBirthPicker
+              value={dobIso}
+              onChange={setDobIso}
+              label="Date of Birth"
+              // required  // leave commented if DOB is optional
+            />
+
+            <input
+              className="border rounded px-3 py-2"
+              placeholder="Relationship (e.g., Father, Grandmother)"
+              value={relationship}
+              onChange={e => setRelationship(e.target.value)}
+            />
+            <input
+              className="border rounded px-3 py-2"
+              placeholder="Themes (comma-separated)"
+              value={themes}
+              onChange={e => setThemes(e.target.value)}
+            />
             <label className="text-sm">Output Type</label>
-            <select className="border rounded px-3 py-2" value={output} onChange={e=>setOutput(e.target.value)}>
+            <select
+              className="border rounded px-3 py-2"
+              value={output}
+              onChange={e => setOutput(e.target.value)}
+            >
               <option value="book">Book (multi-chapter)</option>
               <option value="single">Single Story</option>
             </select>
@@ -55,7 +89,9 @@ export default function Home() {
               {loading ? 'Creating…' : 'Generate Private Link'}
             </button>
           </form>
+
           {error && <p className="text-red-600">{error}</p>}
+
           {shareUrl && (
             <div className="bg-beige/60 p-4 rounded">
               <p className="font-semibold">Share this private link (treat like a key):</p>

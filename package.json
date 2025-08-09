@@ -2,7 +2,6 @@
   "name": "keepsake-mvp",
   "version": "0.1.0",
   "private": true,
-  "engines": { "node": "20.x" },             // optional but recommended
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -10,6 +9,9 @@
     "lint": "next lint",
     "verify": "node scripts/verify.mjs",
     "prepare": "husky install"
+  },
+  "engines": {
+    "node": ">=18.18"
   },
   "dependencies": {
     "next": "14.2.5",

@@ -7,8 +7,7 @@
   "build": "next build",
   "start": "next start",
   "lint": "next lint",
-  "verify": "node scripts/verify.mjs",
-  "prepare": "husky"
+  "verify": "node scripts/verify.mjs"
 }
   "engines": {
     "node": ">=18.18"

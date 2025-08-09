@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
 
   const result = await exchangeTokenForSession(token); // rotates + cookie
   if (!result.ok) return new NextResponse('Invalid or expired link', { status: 400 });
-
+/*mdm edit*/
 const res = NextResponse.redirect(new URL(`/session/${result.projectId}/upload`, req.url), 303);
 res.cookies.set('kp_session', result.sessionCookie, {
   httpOnly: true, secure: true, sameSite: 'lax', path: '/', maxAge: 60 * 60 * 24 * 14

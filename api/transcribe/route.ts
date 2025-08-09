@@ -1,64 +1,77 @@
+// app/api/transcribe/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { verifySessionCookie } from '@/lib/token';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
-import { openai } from '@/lib/openai';
+import { openai, TRANSCRIPTION_MODEL } from '@/lib/openai';
 import OpenAI from 'openai';
 
-const TRANSCRIPTION_MODEL = process.env.OPENAI_TRANSCRIPTION_MODEL || 'gpt-4o-mini-transcribe';
 const AUDIO_BUCKET = process.env.SUPABASE_BUCKET_AUDIO || 'audio';
 
-export async function POST(req: NextRequest){
+export async function POST(req: NextRequest) {
   const cookie = req.cookies.get('kp_session')?.value;
   const session = cookie ? await verifySessionCookie(cookie) : null;
-  if(!session) return new NextResponse('Unauthorized', { status: 401 });
+  if (!session) return new NextResponse('Unauthorized', { status: 401 });
 
-  try{
-    const { searchParams } = new URL(req.url);
-    const sessionId = (await req.json())?.sessionId || searchParams.get('sessionId');
-    if(!sessionId) return new NextResponse('sessionId required', { status: 400 });
+  try {
+    const body = await req.json().catch(() => ({}));
+    const sessionId =
+      body?.sessionId || new URL(req.url).searchParams.get('sessionId');
+    if (!sessionId) return new NextResponse('sessionId required', { status: 400 });
 
-    // find session
-    const { data: s, error: se } = await supabaseAdmin.from('sessions').select('id, project_id, audio_url').eq('id', sessionId).single();
-    if(se || !s) throw se || new Error('Session not found');
-    if(!s.audio_url) throw new Error('No audio uploaded for this session');
+    // Lookup session + audio
+    const { data: s, error: se } = await supabaseAdmin
+      .from('sessions')
+      .select('id, audio_url')
+      .eq('id', sessionId)
+      .single();
+    if (se || !s) throw se || new Error('Session not found');
+    if (!s.audio_url) throw new Error('No audio uploaded for this session');
 
-    // get a signed URL to download the audio
-    const { data: signed, error: sue } = await supabaseAdmin.storage.from(AUDIO_BUCKET).createSignedUrl(s.audio_url, 60);
-    if(sue || !signed?.signedUrl) throw sue || new Error('Failed to sign audio URL');
+    // Create a short-lived signed URL to the private audio file
+    const { data: signed, error: sue } = await supabaseAdmin.storage
+      .from(AUDIO_BUCKET)
+      .createSignedUrl(s.audio_url, 60);
+    if (sue || !signed?.signedUrl) throw sue || new Error('Failed to sign audio URL');
 
-    // fetch audio bytes
+    // Fetch audio bytes
     const resp = await fetch(signed.signedUrl);
-    if(!resp.ok) throw new Error(`Failed to fetch audio (${resp.status})`);
+    if (!resp.ok) throw new Error(`Failed to fetch audio (${resp.status})`);
     const ab = await resp.arrayBuffer();
-    const file = await OpenAI.toFile(Buffer.from(ab), s.audio_url.split('/').pop() || 'audio.m4a');
 
-    // call OpenAI Transcriptions API
+    // Turn buffer into a file for OpenAI SDK
+    const filename = s.audio_url.split('/').pop() || 'audio.m4a';
+    const file = await OpenAI.toFile(Buffer.from(ab), filename);
+
+    // Call OpenAI Transcriptions API
     const result = await openai.audio.transcriptions.create({
       model: TRANSCRIPTION_MODEL,
       file,
-      // Ask for segment-level timestamps when supported
+      // When supported, return segments too
       response_format: 'verbose_json',
-      timestamp_granularities: ['segment']
+      timestamp_granularities: ['segment'] as any,
     } as any);
 
-    // result may include text and segments depending on model
     const text = (result as any).text || '';
     const segments = (result as any).segments || [];
 
-    // insert transcript
+    // Insert transcript
     const { data: tr, error: te } = await supabaseAdmin
       .from('transcripts')
       .insert({ session_id: sessionId, text, segments })
       .select('id')
       .single();
-    if(te) throw te;
+    if (te) throw te;
 
-    // link to session
-    const { error: ue } = await supabaseAdmin.from('sessions').update({ transcript_id: tr.id }).eq('id', sessionId);
-    if(ue) throw ue;
+    // Link transcript to session
+    const { error: ue } = await supabaseAdmin
+      .from('sessions')
+      .update({ transcript_id: tr.id })
+      .eq('id', sessionId);
+    if (ue) throw ue;
 
     return NextResponse.json({ transcriptId: tr.id });
-  }catch(e:any){
-    return new NextResponse(e.message || 'Transcription failed', { status: 500 });
+  } catch (e: any) {
+    // Surface the real error text to the client during MVP
+    return new NextResponse(e?.message || 'Transcription failed', { status: 500 });
   }
 }

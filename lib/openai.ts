@@ -1,11 +1,14 @@
+// lib/openai.ts
 import OpenAI from 'openai';
 
-const apiKey = process.env.OPENAI_API_KEY;
-if(!apiKey){
-  console.warn('OPENAI_API_KEY not set. Generation/transcription will fail.');
-}
+export const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY!,
+});
 
-export const openai = new OpenAI({ apiKey });
-export const TRANSCRIBE_MODEL = process.env.OPENAI_TRANSCRIPTION_MODEL || 'whisper-1';
-export const OUTLINE_MODEL = process.env.OPENAI_MODEL_OUTLINE || 'gpt-4o-mini';
-export const DRAFT_MODEL = process.env.OPENAI_MODEL_DRAFT || 'gpt-4o';
+// Models (env-overridable)
+export const TRANSCRIPTION_MODEL =
+  process.env.OPENAI_TRANSCRIPTION_MODEL || 'gpt-4o-mini-transcribe';
+export const OUTLINE_MODEL =
+  process.env.OPENAI_MODEL_OUTLINE || 'gpt-4.1-mini';
+export const DRAFT_MODEL =
+  process.env.OPENAI_MODEL_DRAFT || 'gpt-4.1';

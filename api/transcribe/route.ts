@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
       model: TRANSCRIPTION_MODEL,
       file,
       // When supported, return segments too
-      response_format: 'verbose_json',
+      response_format: 'json',
       timestamp_granularities: ['segment'] as any,
     } as any);
 

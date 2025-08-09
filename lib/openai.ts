@@ -1,11 +1,7 @@
-// lib/openai.ts
 import OpenAI from 'openai';
 
-export const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY!,
-});
+export const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
-// Models (env-overridable)
 export const TRANSCRIPTION_MODEL =
   process.env.OPENAI_TRANSCRIPTION_MODEL || 'gpt-4o-mini-transcribe';
 export const OUTLINE_MODEL =

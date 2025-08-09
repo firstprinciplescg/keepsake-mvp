@@ -1,139 +1,139 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useState, useEffect } from 'react';
+import Link from 'next/link';
+import { supabaseBrowser } from '@/lib/supabaseClient';
 
-function Spinner({ label }: { label?: string }) {
-  return (
-    <div className="flex items-center gap-3 text-sm opacity-80" role="status" aria-live="polite">
-      <span className="inline-block h-5 w-5 rounded-full border-2 border-gray-400 border-t-transparent animate-spin" />
-      {label && <span>{label}</span>}
-    </div>
-  );
-}
+export default function UploadPage({
+  params,
+}: { params: { projectId?: string; projectID?: string } }) {
+  // Be tolerant to param casing just in case
+  const routeProjectId =
+    params.projectId ?? params.projectID ?? (params as any).projectid ?? '';
 
-export default function TranscriptPage({ params }: { params: { projectId: string } }){
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [transcriptId, setTranscriptId] = useState<string | null>(null);
-  const [text, setText] = useState<string>('');
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useState<string>('');
+  const [loading, setLoading] = useState(false);
 
-  async function fetchCurrent(){
-    const res = await fetch('/api/session/current');
-    if(!res.ok) throw new Error(await res.text());
-    const data = await res.json();
-    setSessionId(data.sessionId);
-    setTranscriptId(data.transcriptId);
-    return data;
-  }
+  useEffect(() => {
+    // Helpful while debugging: confirm we have the ID
+    console.log('[UploadPage] projectId =', routeProjectId);
+  }, [routeProjectId]);
 
-  async function fetchTranscript(sid: string){
-    const res = await fetch(`/api/transcript?sessionId=${sid}`);
-    if(!res.ok) throw new Error(await res.text());
-    const data = await res.json();
-    setTranscriptId(data.id);
-    setText(data.text || '');
-  }
-
-  async function transcribeNow(sid: string){
-    setStatus('Transcribing your audio… typically 10–60s depending on length.');
-    const res = await fetch('/api/transcribe', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: sid })
-    });
-    if(!res.ok) throw new Error(await res.text());
-    const data = await res.json();
-    setTranscriptId(data.transcriptId);
-    setStatus('Transcription complete.');
-    return data;
-  }
-
-  useEffect(()=>{
-    (async () => {
-      try{
-        const cur = await fetchCurrent();
-        if(!cur.sessionId){
-          setError('No session yet. Upload audio first.');
-        } else if(!cur.transcriptId){
-          await transcribeNow(cur.sessionId);
-          await fetchTranscript(cur.sessionId);
-        } else {
-          await fetchTranscript(cur.sessionId);
-        }
-      }catch(e:any){
-        setError(e.message || 'Failed to load transcript');
-      } finally{
-        setLoading(false);
-      }
-    })();
-  }, []);
-
-  async function save(){
-    if(!transcriptId) return;
-    setSaving(true);
-    setError(null);
-    try{
-      const res = await fetch('/api/transcript', {
-        method:'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transcriptId, text })
+  async function getDuration(f: File): Promise<number | null> {
+    try {
+      const url = URL.createObjectURL(f);
+      const audio = document.createElement('audio');
+      audio.src = url;
+      await new Promise((res, rej) => {
+        audio.onloadedmetadata = () => res(null);
+        audio.onerror = () => rej(new Error('metadata error'));
       });
-      if(!res.ok) throw new Error(await res.text());
-      setStatus('Saved.');
-    }catch(e:any){
-      setError(e.message || 'Save failed');
-    }finally{
-      setSaving(false);
+      const d = isFinite(audio.duration) ? Math.round(audio.duration) : null;
+      URL.revokeObjectURL(url);
+      return d;
+    } catch {
+      return null;
     }
   }
 
-  // Show a spinner while loading, or while an active transcription is running
-  const isBusy = loading || /transcrib/i.test(status);
+  const doUpload = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!file) return;
+    if (!routeProjectId) {
+      setError('Missing project id in route.');
+      return;
+    }
 
-  if (isBusy) {
-    return (
-      <main className="p-6 md:p-12">
-        <div className="mx-auto max-w-3xl bg-white rounded-2xl shadow p-6">
-          <h1 className="text-3xl font-black mb-3">Transcript</h1>
-          <Spinner label={status || 'Preparing…'} />
-          <p className="text-xs opacity-60 mt-2">You can keep this tab open; the text will appear when ready.</p>
-        </div>
-      </main>
-    );
-  }
+    setLoading(true);
+    setError(null);
+    setMessage(null);
 
-  if(error) {
-    return (
-      <main className="p-6 md:p-12">
-        <div className="mx-auto max-w-3xl bg-white rounded-2xl shadow p-6">
-          <h1 className="text-3xl font-black mb-3">Transcript</h1>
-          <p className="text-red-700">{error}</p>
-        </div>
-      </main>
-    );
-  }
+    try {
+      // 1) Ask server for a signed upload URL/token
+      const initRes = await fetch('/api/upload-init', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: routeProjectId,
+          fileName: file.name,
+          fileSize: file.size,
+        }),
+      });
+      if (!initRes.ok) throw new Error(await initRes.text());
+      const { bucket, path, token } = await initRes.json();
+
+      // 2) Upload file directly to Supabase Storage
+      const { error: upErr } = await supabaseBrowser
+        .storage
+        .from(bucket)
+        .uploadToSignedUrl(path, token, file, {
+          upsert: false,
+          contentType: file.type || 'application/octet-stream',
+        });
+      if (upErr) throw new Error(upErr.message);
+
+      // 3) (Optional) get duration for metrics
+      const duration = await getDuration(file);
+
+      // 4) Tell server we’re done → creates the sessions row
+      const finRes = await fetch('/api/upload-complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: routeProjectId,
+          path,
+          durationSeconds: duration,
+        }),
+      });
+      if (!finRes.ok) throw new Error(await finRes.text());
+      const data = await finRes.json();
+
+      setMessage(`Uploaded! Session ${data.sessionId} created. Continue to Transcript.`);
+    } catch (err: any) {
+      setError(err.message || 'Upload failed');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <main className="p-6 md:p-12">
       <div className="mx-auto max-w-3xl bg-white rounded-2xl shadow p-6">
-        <h1 className="text-3xl font-black mb-3">Transcript</h1>
-        <p className="text-sm opacity-80 mb-4">Edit for clarity. These changes affect outline & drafts.</p>
-        <textarea
-          value={text}
-          onChange={e=>setText(e.target.value)}
-          rows={18}
-          className="w-full border rounded p-3"
-        />
-        <div className="mt-3 flex items-center gap-3">
-          <button onClick={save} disabled={saving} className="bg-terracotta text-white font-bold rounded px-4 py-2">
-            {saving ? 'Saving…' : 'Save changes'}
+        <h1 className="text-3xl font-black">Upload Audio</h1>
+
+        {!routeProjectId && (
+          <p className="text-red-700 mt-2">
+            Missing project id. Please re-open your private link and click Continue again.
+          </p>
+        )}
+
+        <form onSubmit={doUpload} className="space-y-4 mt-4">
+          <input
+            type="file"
+            accept=".mp3,.wav,.m4a"
+            onChange={(e) => setFile(e.target.files?.[0] || null)}
+          />
+          <button
+            disabled={!file || !routeProjectId || loading}
+            className="bg-terracotta text-white font-bold rounded px-4 py-2"
+          >
+            {loading ? 'Uploading…' : 'Upload'}
           </button>
-          {status && !/transcrib/i.test(status) && (
-            <span className="text-green-700 text-sm">{status}</span>
-          )}
-        </div>
+        </form>
+
+        {message && (
+          <p className="text-green-700 mt-3">
+            {message}{' '}
+            <Link
+              className="underline text-terracotta"
+              href={`/session/${routeProjectId}/transcript`}
+            >
+              Go to Transcript →
+            </Link>
+          </p>
+        )}
+        {error && <p className="text-red-700 mt-3">{error}</p>}
       </div>
     </main>
   );

@@ -3,7 +3,7 @@ node_modules/
 pnpm-lock.yaml
 yarn.lock
 
-# Next.js build output
+# Next.js build output 
 .next/
 out/
 dist/

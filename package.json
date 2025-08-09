@@ -2,14 +2,14 @@
   "name": "keepsake-mvp",
   "version": "0.1.0",
   "private": true,
+  "engines": { "node": "20.x" },             // optional but recommended
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
-  },
-  "engines": {
-    "node": ">=18.18"
+    "lint": "next lint",
+    "verify": "node scripts/verify.mjs",
+    "prepare": "husky install"
   },
   "dependencies": {
     "next": "14.2.5",
@@ -34,6 +34,7 @@
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.7",
     "eslint": "^8.57.0",
-    "eslint-config-next": "14.2.5"
+    "eslint-config-next": "14.2.5",
+    "husky": "^9.0.0"
   }
 }

@@ -9,9 +9,9 @@ export const runtime = 'nodejs';
 const AUDIO_BUCKET = process.env.SUPABASE_BUCKET_AUDIO || 'audio';
 
 type TranscribeBody = {
-  sessionId?: string;   // we'll look up the audio key if provided
-  audioKey?: string;    // Supabase Storage key, e.g. "<projectId>/<timestamp>-file.mp3"
-  path?: string;        // alias for audioKey
+  sessionId?: string; // we'll look up the audio key if provided
+  audioKey?: string;  // Supabase Storage key, e.g. "<projectId>/<timestamp>-file.mp3"
+  path?: string;      // alias for audioKey
 };
 
 export async function POST(req: NextRequest) {
@@ -25,7 +25,8 @@ export async function POST(req: NextRequest) {
   try {
     const body = (await req.json().catch(() => ({}))) as TranscribeBody;
 
-    sessionId = body?.sessionId || new URL(req.url).searchParams.get('sessionId') || undefined;
+    sessionId =
+      body?.sessionId || new URL(req.url).searchParams.get('sessionId') || undefined;
     audioKey = body?.audioKey || body?.path || undefined;
 
     // If we were given a sessionId, fetch the storage key from DB
@@ -48,14 +49,11 @@ export async function POST(req: NextRequest) {
     }
 
     // Sign a short-lived URL for the private object
-    const { data: signed, error: signErr } = await supabaseAdmin
-      .storage.from(AUDIO_BUCKET)
+    const { data: signed, error: signErr } = await supabaseAdmin.storage
+      .from(AUDIO_BUCKET)
       .createSignedUrl(audioKey, 600); // 10 minutes
-    if (signErr || !signed?.signedUrl) {
-      throw signErr || new Error('Failed to sign audio URL');
-    }
+    if (signErr || !signed?.signedUrl) throw signErr || new Error('Failed to sign audio URL');
 
-    // ✅ Safe debug log goes right after signing (don’t log the URL itself)
     console.debug('[transcribe] signed url created', {
       hasUrl: !!signed?.signedUrl,
       urlLength: signed?.signedUrl?.length || 0,
@@ -76,25 +74,39 @@ export async function POST(req: NextRequest) {
     const blob = new Blob([ab], { type: contentType });
     const file = new File([blob], filename, { type: contentType });
 
-    // Transcribe with ev3 (supports "json" or "text", not "verbose_json")
-    const tr: any = await openai.audio.transcriptions.create({
-      model: TRANSCRIPTION_MODEL,   // set OPENAI_TRANSCRIPTION_MODEL=gpt-4o-mini-transcribe-api-ev3
+    // Choose response format based on model
+    const usingWhisper = TRANSCRIPTION_MODEL.toLowerCase() === 'whisper-1';
+    const requestBody: any = {
+      model: TRANSCRIPTION_MODEL,
       file,
-      response_format: 'json',
+      response_format: usingWhisper ? 'verbose_json' : 'json',
       temperature: 0,
-    } as any);
+    };
+    if (usingWhisper) {
+      // Only Whisper supports timestamp granularity with verbose_json
+      requestBody.timestamp_granularities = ['segment']; // or ['word','segment']
+    }
 
-    const text = tr?.text ?? tr?.output_text ?? '';
+    const tr: any = await openai.audio.transcriptions.create(requestBody);
+
+    const text: string = tr?.text ?? tr?.output_text ?? '';
     if (!text) throw new Error('Empty transcription result');
 
-    // Insert transcript
-    const { data: inserted, error: tErr } = await supabaseAdmin
+    // Whisper + verbose_json returns segments; others won't
+    const segments: any[] =
+      usingWhisper && Array.isArray(tr?.segments) ? tr.segments : [];
+
+    // Upsert transcript by session to avoid unique conflicts if retried
+    const { data: upserted, error: tErr } = await supabaseAdmin
       .from('transcripts')
-      .insert({
-        session_id: sessionId ?? null,
-        text,
-        segments: [], // ev3 doesn’t return segment timings
-      })
+      .upsert(
+        {
+          session_id: sessionId ?? null,
+          text,
+          segments,
+        },
+        { onConflict: 'session_id' }
+      )
       .select('id')
       .single();
     if (tErr) throw tErr;
@@ -103,18 +115,19 @@ export async function POST(req: NextRequest) {
     if (sessionId) {
       const { error: ue } = await supabaseAdmin
         .from('sessions')
-        .update({ transcript_id: inserted.id })
+        .update({ transcript_id: upserted.id })
         .eq('id', sessionId);
       if (ue) throw ue;
     }
 
-    return NextResponse.json({ transcriptId: inserted.id });
+    return NextResponse.json({ transcriptId: upserted.id });
   } catch (e: any) {
     console.error('[app/api/transcribe] error', {
       message: e?.message,
       audioBucket: AUDIO_BUCKET,
       audioKey,
       sessionId,
+      model: TRANSCRIPTION_MODEL,
     });
     return new NextResponse(e?.message || 'Transcription failed', { status: 500 });
   }

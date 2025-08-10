@@ -1,42 +1,73 @@
+// app/api/outline/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { openai, OUTLINE_MODEL } from '@/lib/openai';
-import { supabaseAdmin } from '@/lib/supabaseAdmin';
 import { verifySessionCookie } from '@/lib/token';
+import { supabaseAdmin } from '@/lib/supabaseAdmin';
+import { openai } from '@/lib/openai';
 
-export async function POST(req: NextRequest){
-  const cookie = req.cookies.get('kp_session')?.value;
-  const session = cookie ? await verifySessionCookie(cookie) : null;
-  if(!session) return new NextResponse('Unauthorized', { status: 401 });
+export const runtime = 'nodejs';
 
-  try{
-    const { sessionId } = await req.json();
-    if(!sessionId) return new NextResponse('sessionId required', { status: 400 });
+// You can override this in Vercel env if desired
+const OUTLINE_MODEL = process.env.OPENAI_OUTLINE_MODEL || 'gpt-4o-mini';
 
-    // Fetch transcript + interviewee metadata
-    const { data: sess, error: se } = await supabaseAdmin.from('sessions').select('id, project_id, transcript_id, interviewee_id').eq('id', sessionId).single();
-    if(se || !sess) throw se || new Error('Session not found');
-
-    const { data: tr, error: te } = await supabaseAdmin.from('transcripts').select('text').eq('id', sess.transcript_id).single();
-    if(te || !tr) throw te || new Error('Transcript missing');
-
-    const { data: iv, error: ie } = await supabaseAdmin.from('interviewees').select('name, themes, output_prefs').eq('id', sess.interviewee_id).single();
-    if(ie || !iv) throw ie || new Error('Interviewee missing');
-
-    const sys = 'You are a memoir outline generator. Given a transcript and metadata, produce JSON: {"chapters":[{"title":"","bullets":[""]}]}. Aim for 5–7 chapters focused on core life moments.';
-    const user = `Transcript: ${tr.text}\nMetadata: ${JSON.stringify(iv)}`;
-
-    const chat = await openai.chat.completions.create({
-      model: OUTLINE_MODEL,
-      messages: [{ role:'system', content: sys }, { role:'user', content: user }],
-      temperature: 0.3
-    });
-    const content = chat.choices[0]?.message?.content || '';
-    const parsed = JSON.parse(content);
-
-    const { data: out, error: oe } = await supabaseAdmin.from('outlines').insert({ session_id: sess.id, structure: parsed, approved: false }).select('*').single();
-    if(oe) throw oe;
-    return NextResponse.json({ outlineId: out.id, structure: out.structure });
-  }catch(e:any){
-    return new NextResponse(e.message || 'Failed to generate outline', { status: 500 });
-  }
+// ---- Helpers ----
+function safeLog(ctx: any) {
+  console.error('[app/api/outline] error', ctx);
 }
+
+function normalizeOutline(obj: any) {
+  // Expecting: { chapters: [{ title: string, bullets: string[] }, ...] }
+  if (!obj || typeof obj !== 'object') return { chapters: [] };
+  const chapters = Array.isArray(obj.chapters) ? obj.chapters : [];
+  return {
+    chapters: chapters.map((c) => ({
+      title: String(c?.title ?? ''),
+      bullets: Array.isArray(c?.bullets)
+        ? c.bullets.map((b) => String(b ?? '')).filter(Boolean)
+        : String(c?.bullets ?? '')
+            .split('\n')
+            .map((b) => b.trim())
+            .filter(Boolean),
+    })),
+  };
+}
+
+// ---- GET /api/outline?sessionId=... OR ?outlineId=... ----
+export async function GET(req: NextRequest) {
+  try {
+    const cookie = req.cookies.get('kp_session')?.value;
+    const session = cookie ? await verifySessionCookie(cookie) : null;
+    if (!session) return new NextResponse('Unauthorized', { status: 401 });
+
+    const { searchParams } = new URL(req.url);
+    const outlineId = searchParams.get('outlineId');
+    const sessionId = searchParams.get('sessionId');
+
+    if (!outlineId && !sessionId) {
+      return new NextResponse('outlineId or sessionId required', { status: 400 });
+    }
+
+    if (outlineId) {
+      const { data, error } = await supabaseAdmin
+        .from('outlines')
+        .select('id, outline')
+        .eq('id', outlineId)
+        .single();
+      if (error || !data) return new NextResponse('Not found', { status: 404 });
+      return NextResponse.json({ id: data.id, outline: data.outline });
+    }
+
+    // sessionId case: return most recent
+    const { data, error } = await supabaseAdmin
+      .from('outlines')
+      .select('id, outline')
+      .eq('session_id', sessionId!)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!data) return new NextResponse('Not found', { status: 404 });
+    return NextResponse.json({ id: data.id, outline: data.outline });
+  } catch (e: any) {
+    safeLog({ message: e?.message });
+    return new NextResponse(e?.message || 'Outline fetch failed', { status: 500 });

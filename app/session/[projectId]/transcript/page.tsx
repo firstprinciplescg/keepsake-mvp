@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation'; // ⬅️ add
 
 function Spinner({ label }: { label?: string }) {
   return (
@@ -12,12 +13,15 @@ function Spinner({ label }: { label?: string }) {
 }
 
 export default function TranscriptPage({ params }: { params: { projectId: string } }) {
+  const router = useRouter(); // ⬅️ add
+
   const [projectId, setProjectId] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [transcriptId, setTranscriptId] = useState<string | null>(null);
   const [text, setText] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [generating, setGenerating] = useState(false); // ⬅️ add
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string>('');
   const [noSession, setNoSession] = useState(false);
@@ -29,7 +33,7 @@ export default function TranscriptPage({ params }: { params: { projectId: string
   }, [params.projectId]);
 
   async function fetchCurrent() {
-    const res = await fetch('/api/session/current');
+    const res = await fetch('/api/session/current', { cache: 'no-store' });
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
     setProjectId(data.projectId || projectId || params.projectId || null);
@@ -39,7 +43,7 @@ export default function TranscriptPage({ params }: { params: { projectId: string
   }
 
   async function fetchTranscript(sid: string) {
-    const res = await fetch(`/api/transcript?sessionId=${sid}`);
+    const res = await fetch(`/api/transcript?sessionId=${sid}`, { cache: 'no-store' });
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
     setTranscriptId(data.id);
@@ -100,6 +104,29 @@ export default function TranscriptPage({ params }: { params: { projectId: string
     }
   }
 
+  // ⬇️ add: generate outline and navigate
+  async function generateOutline() {
+    if (!sessionId || !projectId) return;
+    setGenerating(true);
+    setError(null);
+    setStatus('Generating outline…');
+    try {
+      const res = await fetch('/api/outline', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setStatus('Outline ready.');
+      router.push(`/session/${projectId}/outline`);
+    } catch (e: any) {
+      setError(e.message || 'Failed to generate outline');
+      setStatus('');
+    } finally {
+      setGenerating(false);
+    }
+  }
+
   if (loading) {
     return (
       <main className="p-6 md:p-12">
@@ -157,7 +184,7 @@ export default function TranscriptPage({ params }: { params: { projectId: string
           rows={18}
           className="w-full border rounded p-3"
         />
-        <div className="mt-3 flex items-center gap-3">
+        <div className="mt-3 flex flex-wrap items-center gap-3">
           <button
             onClick={save}
             disabled={saving}
@@ -165,6 +192,17 @@ export default function TranscriptPage({ params }: { params: { projectId: string
           >
             {saving ? 'Saving…' : 'Save changes'}
           </button>
+
+          {/* ⬇️ add: next-step CTA */}
+          <button
+            onClick={generateOutline}
+            disabled={generating || !sessionId || !projectId}
+            className="bg-stone-900 text-white font-bold rounded px-4 py-2 disabled:opacity-60"
+            title={!sessionId ? 'No session yet' : undefined}
+          >
+            {generating ? 'Generating…' : 'Next: Generate outline'}
+          </button>
+
           {status && !/transcrib/i.test(status) && (
             <span className="text-green-700 text-sm">{status}</span>
           )}

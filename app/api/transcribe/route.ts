@@ -34,12 +34,17 @@ async function fetchBytesWithTimeout(url: string, ms: number): Promise<Uint8Arra
   }
 }
 
+// TS-safe helper: convert a Uint8Array into an ArrayBuffer BlobPart
+function u8ToArrayBuffer(u8: Uint8Array): ArrayBuffer {
+  // Using Uint8Array.slice() returns a new typed array whose .buffer is a proper ArrayBuffer
+  return u8.slice().buffer;
+}
+
 export async function POST(req: NextRequest) {
   const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY!,
-    // honor "retry once" requirement at client level too
-    maxRetries: 1,
-    timeout: 120_000,
+    maxRetries: 1,       // project rule: retry once
+    timeout: 120_000,    // up to 120s for larger audio
   });
 
   try {
@@ -68,7 +73,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No audio key found for session", code: "no_audio" }, { status: 400 });
     }
 
-    // 2) Sign the audio URL (10 min max). Do NOT log signed URLs.
+    // 2) Sign the audio URL (≤10 min). Do NOT log signed URLs.
     const parsed = parseStorageKey(session.audio_url);
     if (!parsed) {
       return NextResponse.json({ error: "Invalid audio key format", code: "bad_audio_key" }, { status: 422 });
@@ -94,8 +99,11 @@ export async function POST(req: NextRequest) {
       audioBytes = await fetchBytesWithTimeout(signed.signedUrl, 30_000);
     }
 
-    // 4) Prepare File for OpenAI (contentType set per upload gotcha)
-    const file = await OpenAI.toFile(new Blob([audioBytes!], { type: "audio/mpeg" }), path.split("/").pop() || "audio.mpeg");
+    // 4) Prepare File for OpenAI (pass ArrayBuffer to avoid TS BlobPart mismatch)
+    const filename = path.split("/").pop() || "audio.mpeg";
+    const arrayBuffer = u8ToArrayBuffer(audioBytes!);
+    const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
+    const file = await OpenAI.toFile(blob, filename);
 
     // 5) Whisper transcription (verbose_json)
     const result = await openai.audio.transcriptions.create({

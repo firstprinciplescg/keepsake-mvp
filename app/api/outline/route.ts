@@ -10,7 +10,7 @@ const OUTLINE_MODEL = process.env.OPENAI_MODEL_OUTLINE || "gpt-4o-mini";
 
 /**
  * GET /api/outline?sessionId=...
- * Returns { outlineId, outline } or 404 if none.
+ * Returns { outlineId, outline, approved, approved_at } or 404 if none.
  */
 export async function GET(req: NextRequest) {
   const cookie = req.cookies.get("kp_session")?.value;
@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
 
   const { data: row, error } = await supabaseAdmin
     .from("outlines")
-    .select("id, outline, structure")
+    .select("id, outline, structure, approved, approved_at")
     .eq("session_id", sessionId)
     .maybeSingle();
 
@@ -34,7 +34,12 @@ export async function GET(req: NextRequest) {
   if (!row) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
   const outline = row.outline ?? row.structure ?? [];
-  return NextResponse.json({ outlineId: row.id, outline });
+  return NextResponse.json({
+    outlineId: row.id,
+    outline,
+    approved: row.approved ?? false,
+    approved_at: row.approved_at ?? null,
+  });
 }
 
 /**
@@ -90,25 +95,131 @@ export async function POST(req: NextRequest) {
     let up = await supabaseAdmin
       .from("outlines")
       .upsert(payload, { onConflict: "session_id" })
-      .select("id")
+      .select("id, approved, approved_at")
       .single();
 
-    // Retry without `structure` if that column doesn't exist in this env
+    // Retry without `structure` if that column doesn't exist
     if (up.error && /column .*structure.* does not exist/i.test(up.error.message)) {
       up = await supabaseAdmin
         .from("outlines")
         .upsert({ session_id: sessionId, outline: outlineJson }, { onConflict: "session_id" })
-        .select("id")
+        .select("id, approved, approved_at")
         .single();
     }
 
     if (up.error || !up.data?.id) throw up.error || new Error("Outline upsert failed");
 
-    return NextResponse.json({ outlineId: up.data.id });
+    return NextResponse.json({
+      outlineId: up.data.id,
+      approved: up.data.approved ?? false,
+      approved_at: up.data.approved_at ?? null,
+    });
   } catch (e: any) {
     console.error("[outline][POST] error", { message: e?.message });
     return NextResponse.json(
       { error: e?.message || "Outline generation failed" },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * PATCH /api/outline
+ * Body: { sessionId: string, outline?: any, approved?: boolean }
+ * - Saves edited outline JSON (and legacy `structure` if present).
+ * - Optionally toggles approval; sets approved_at automatically.
+ */
+export async function PATCH(req: NextRequest) {
+  const cookie = req.cookies.get("kp_session")?.value;
+  const session = cookie ? await verifySessionCookie(cookie) : null;
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  let sessionId: string | undefined;
+  let newOutline: any;
+  let approved: boolean | undefined;
+
+  try {
+    const body = (await req.json().catch(() => ({}))) as {
+      sessionId?: string;
+      outline?: any;
+      approved?: boolean;
+    };
+
+    sessionId = body?.sessionId;
+    newOutline = body?.outline;
+    approved = typeof body?.approved === "boolean" ? body.approved : undefined;
+
+    if (!sessionId) {
+      return NextResponse.json({ error: "sessionId required" }, { status: 400 });
+    }
+    if (typeof newOutline === "undefined" && typeof approved === "undefined") {
+      return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
+    }
+
+    // 0) Ensure a row exists for this session (idempotent behavior)
+    const { data: existing, error: selErr } = await supabaseAdmin
+      .from("outlines")
+      .select("id")
+      .eq("session_id", sessionId)
+      .maybeSingle();
+    if (selErr) throw selErr;
+    if (!existing) {
+      const seed = { session_id: sessionId, outline: Array.isArray(newOutline) || typeof newOutline === "object" ? newOutline : [] };
+      const { error: insErr } = await supabaseAdmin.from("outlines").insert(seed);
+      if (insErr) throw insErr;
+    }
+
+    // 1) Build update payload
+    const payload: any = {};
+    if (typeof newOutline !== "undefined") {
+      // Minimal validation: allow array/object only
+      const t = typeof newOutline;
+      const ok = t === "object" && newOutline !== null;
+      if (!ok) return NextResponse.json({ error: "outline must be an object or array" }, { status: 400 });
+      payload.outline = newOutline;
+      // Attempt to update legacy column too (if present)
+      payload.structure = newOutline;
+    }
+    if (typeof approved !== "undefined") {
+      payload.approved = !!approved;
+      payload.approved_at = approved ? new Date().toISOString() : null;
+    }
+
+    // 2) Update (try with `structure`, retry without if column missing)
+    let q = supabaseAdmin
+      .from("outlines")
+      .update(payload)
+      .eq("session_id", sessionId)
+      .select("id, approved, approved_at")
+      .maybeSingle();
+
+    let { data, error } = await q;
+
+    if (error && /column .*structure.* does not exist/i.test(error.message)) {
+      // remove structure and retry
+      const { structure, ...noStructure } = payload;
+      ({ data, error } = await supabaseAdmin
+        .from("outlines")
+        .update(noStructure)
+        .eq("session_id", sessionId)
+        .select("id, approved, approved_at")
+        .maybeSingle());
+    }
+
+    if (error || !data?.id) throw error || new Error("Update failed");
+
+    return NextResponse.json({
+      outlineId: data.id,
+      approved: data.approved ?? false,
+      approved_at: data.approved_at ?? null,
+    });
+  } catch (e: any) {
+    console.error("[outline][PATCH] error", {
+      message: e?.message,
+      sessionId,
+    });
+    return NextResponse.json(
+      { error: e?.message || "Outline update failed" },
       { status: 500 }
     );
   }
